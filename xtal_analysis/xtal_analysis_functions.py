@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-#making small change
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,19 +10,17 @@ from   xtal_analysis.params import *
 from   tqdm   import tqdm
 
 """
-This file contains the functions required to run the following jupyter notebooks :
+Collection of functions for crystallographic dataset handling and difference map generation. Relies on GEMMI and reciprocalspaceship libraries.
 
-	(1) qweight_correlate_pipeline.ipynb
-	(2) 2fo-fc_correlate_pipeline.ipynb
-	(3) pca_maps.ipynb
-
-Other requirements :
+Requirements :
     
     edit params.py file for all dataset-specific/personal choices --> RIGHT NOW THIS WORKS IF LIBRARY IS SETUP AS 'DEVELOP'
-	make_ccp4map.sh script (appropriately filled in) in the same path as specified by the screen_qweighted function
+    
+Dependencies :
+    
+    will add
 
-
-AF 15/02/2022
+AF 01/06/2022
 
 """
 
@@ -58,6 +55,24 @@ def scale_iso(data1, data2, ds):
     return matrix, matrix.x[0], matrix.x[1], (matrix.x[0]*np.exp(-matrix.x[1]*(qs**2)))*data2
 
 def map_from_Fs(path, Fs, phis, map_res):
+    
+    """
+    Creates electron density map from a mtz file
+
+    Input :
+    
+    1. path of mtz to use – as string
+    2. structure factor labels in mtz – as string
+    3. phases labels in mtz – as string
+    4. spacing to use for grid calculation – as float
+
+    Returns :
+
+    1. entire map as a GEMMI object
+
+
+    """
+    
     
     mtz  = gm.read_mtz_file('{}'.format(path))
     ccp4 = gm.Ccp4Map()
@@ -256,7 +271,7 @@ def make_Nbg_map(query_map_data, background_map_data, Nbg_value):
     
 def save_Nbg_map(map_data, Nbg, path, name) :
 
-    """ Saves background subtracted map calculated by make_Nbg_map function (params specific for SACLA Cl-rsEGFP2 2021 data)"""
+    """ Saves background subtracted map calculated by make_Nbg_map function"""
     
     og = gm.Ccp4Map()
     og.grid = gm.FloatGrid(np.zeros((grid_size[0], grid_size[1], grid_size[2]), dtype=np.float32))
@@ -277,7 +292,7 @@ def save_Nbg_map(map_data, Nbg, path, name) :
     
 def CC_vs_n(on_map, off_map) :
 
-    """ Obtains Pearson correlation coefficient for two maps (input at 1D numpy arrays)"""
+    """ Obtains Pearson correlation coefficient for two maps (input as 1D numpy arrays)"""
         
     CC = np.corrcoef(on_map, off_map)[0,1]
     
@@ -308,7 +323,7 @@ def screen_qweighted(on_s, off_s, sig_on, sig_off, calc_df, Nbg, name, alpha, h_
 	7.     name for this map iteration (as a string)
 	8-9.   high and low resolution cutoffs (as floats)
 	10.    path (as string) where maps should be saved. The bash script make_ccp4map.sh should be copied here.
-        11-13. chromophore center (xyz coordinate vector) and radius (float) to be used for the mask, as well as grid sampling (float)
+    11-13. chromophore center (xyz coordinate vector) and radius (float) to be used for the mask, as well as grid sampling (float)
 
     Returns :
 
@@ -318,18 +333,14 @@ def screen_qweighted(on_s, off_s, sig_on, sig_off, calc_df, Nbg, name, alpha, h_
 
     """
 
-    diffs = on_s - Nbg * off_s
-    sig_diffs = np.sqrt(sig_on**2 + sig_off**2)
-    
-    ws = compute_weights(diffs, sig_diffs, alpha=alpha)
-    diffs_w = ws * diffs
+    diffs           = on_s - Nbg * off_s
+    sig_diffs       = np.sqrt(sig_on**2 + sig_off**2)
+    ws              = compute_weights(diffs, sig_diffs, alpha=alpha)
+    diffs_w         = ws * diffs
     
     calc_df["DF"]	= diffs
-
     calc_df["DF"]	= calc_df["DF"].astype("SFAmplitude")
-
     calc_df["WDF"]	= diffs_w
-
     calc_df["WDF"]	= calc_df["WDF"].astype("SFAmplitude")
 
     calc_df["SIGDF"]	= sig_diffs
