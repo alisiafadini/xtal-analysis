@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+
 import matplotlib.pyplot as plt
 import numpy as np
 import reciprocalspaceship as rs
@@ -8,21 +9,163 @@ import gemmi as gm
 import os
 from   xtal_analysis.params import *
 from   tqdm   import tqdm
+from skimage.restoration import denoise_tv_chambolle
+import diptest
+from scipy.stats import norm, kurtosis, skew, differential_entropy
+
 
 """
-Collection of functions for crystallographic dataset handling and difference map generation. Relies on GEMMI and reciprocalspaceship libraries.
+This file contains the functions required to run the following jupyter notebooks :
 
-Requirements :
+	(1) qweight_correlate_pipeline.ipynb
+	(2) 2fo-fc_correlate_pipeline.ipynb
+	(3) pca_maps.ipynb
+
+Other requirements :
     
     edit params.py file for all dataset-specific/personal choices --> RIGHT NOW THIS WORKS IF LIBRARY IS SETUP AS 'DEVELOP'
-    
-Dependencies :
-    
-    will add
+	make_ccp4map.sh script (appropriately filled in) in the same path as specified by the screen_qweighted function
 
-AF 01/06/2022
+
+AF 15/02/2022
 
 """
+
+    
+def map2mtz(map, mtz_name, high_res):
+
+    """
+    Writes an mtz from a map file
+
+    Input :
+
+    1. map path – string
+    2. output mtz path – string
+    3. high resolution cutoff – float
+
+    """
+
+    m = gm.read_ccp4_map(map, setup=True)
+    sf = gm.transform_map_to_f_phi(m.grid, half_l=True)
+    data = sf.prepare_asu_data(dmin=high_res)
+
+    mtz = gm.Mtz(with_base=True)
+    mtz.spacegroup = sf.spacegroup
+    mtz.set_cell_for_all(sf.unit_cell)
+    mtz.add_dataset('unknown')
+    mtz.add_column('FWT', 'F')
+    mtz.add_column('PHWT', 'P')
+    mtz.set_data(data)
+    mtz.write_to_file(mtz_name)
+    
+
+def make_test_set(df, percent, Fs, out_name):
+
+    """
+    Writes an mtz where data from the original mtz has been divided in a "fit" set and a "test" set.
+    Also saves test set indices as numpy object.
+
+    Input :
+
+    1. dataset mtz to split – in reciprocalspaceship format
+    2. fraction of reflections to keep for test set – float e.g. 0.03
+    3. labels for structure factors to split – string
+    4. output file specification – string
+
+    """
+
+    choose_test = np.random.binomial(1, percent, df[Fs].shape[0]).astype(bool)
+    test_set = df[Fs][choose_test] #e.g. 3%
+    fit_set  = df[Fs][np.invert(choose_test)] #97%
+    
+    df["fit-set"]   = fit_set
+    df["fit-set"]   = df["fit-set"].astype("SFAmplitude")
+    df["test-set"]  = test_set
+    df["test-set"]  = df["test-set"].astype("SFAmplitude")
+    
+    df.write_mtz("split-{}.mtz".format(out_name))
+    np.save("test_flags-{}.npy".format(out_name), choose_test)
+    
+    return test_set, fit_set
+
+def TV_filter(map, l, name):
+    
+    """
+    Applies TV filtering to a map and saves it in directory.
+    Computes negentropy and diptest statistic for denoised map.
+
+    Input :
+
+    1. map element (as loaded by GEMMI)
+    2. weighting for filtering – float
+    3. name specification for output map – string
+
+    Returns :
+
+    1. filtered map – 3D numpy array
+    2. negentropy value – float
+    3. diptest value – float
+    
+    """
+
+    map_TV = denoise_tv_chambolle(np.array(map.grid), weight=l)
+    entropy    = negentropy(map_TV.flatten())
+    dip        = diptest.dipstat(map_TV.flatten())
+    save_map('','{name}_map_TV_{l:.5f}'.format(name=name, l=l), map_TV)
+
+    return map_TV, entropy, dip
+
+def positive_Fs(df, phases, Fs, phases_new, Fs_new):
+
+    """
+    Converts between mtz format where deltaFs are saved as both positive and negative, to format where they are only positive.
+
+    Input :
+
+    1. mtz (ideally cut at resolution already) –reciprocalspaceship format
+    2. label for phases in original mtz – string
+    3. label for Fs in original mtz – string
+    4. label for new phases in output mtz – string
+    5. label for new Fs in output mtz – string
+
+    Returns :
+
+    1. mtz dataset with new columns added – reciprocalspaceship format
+    
+    """
+    
+    new_phis = df[phases].copy(deep=True)
+    new_Fs   = df[Fs].copy(deep=True)
+    
+    negs = np.where(df[Fs]<0)
+    
+    for i in negs:
+        new_phis.iloc[i]  = df[phases].iloc[i]+180
+        new_Fs.iloc[i]    = np.abs(new_Fs.iloc[i])
+
+    df_new = df.copy(deep=True)
+    df_new[Fs_new]  = new_Fs
+    df_new[Fs_new]  = df_new[Fs_new].astype("SFAmplitude")
+    df_new[phases_new]  = new_phis
+    df_new[phases_new]  = df_new["new_og-Phis"].astype("Phase")
+    
+    return df_new
+
+
+def negentropy(x):
+    
+    # negetropy is the difference between the entropy of samples x
+    # and a Gaussian with same variance
+    # http://gregorygundersen.com/blog/2020/09/01/gaussian-entropy/
+    
+    std = np.std(x)
+    neg_e = np.log(std*np.sqrt(2*np.pi*np.exp(1))) - differential_entropy(x)
+    #neg_e = 0.5 * np.log(2.0 * np.pi * std ** 2) + 0.5 - differential_entropy(x)
+    #assert neg_e >= 0.0
+    
+    return neg_e
+
+
 
 def scale_iso(data1, data2, ds):
 
@@ -55,24 +198,6 @@ def scale_iso(data1, data2, ds):
     return matrix, matrix.x[0], matrix.x[1], (matrix.x[0]*np.exp(-matrix.x[1]*(qs**2)))*data2
 
 def map_from_Fs(path, Fs, phis, map_res):
-    
-    """
-    Creates electron density map from a mtz file
-
-    Input :
-    
-    1. path of mtz to use – as string
-    2. structure factor labels in mtz – as string
-    3. phases labels in mtz – as string
-    4. spacing to use for grid calculation – as float
-
-    Returns :
-
-    1. entire map as a GEMMI object
-
-
-    """
-    
     
     mtz  = gm.read_mtz_file('{}'.format(path))
     ccp4 = gm.Ccp4Map()
@@ -271,7 +396,7 @@ def make_Nbg_map(query_map_data, background_map_data, Nbg_value):
     
 def save_Nbg_map(map_data, Nbg, path, name) :
 
-    """ Saves background subtracted map calculated by make_Nbg_map function"""
+    """ Saves background subtracted map calculated by make_Nbg_map function (params specific for SACLA Cl-rsEGFP2 2021 data)"""
     
     og = gm.Ccp4Map()
     og.grid = gm.FloatGrid(np.zeros((grid_size[0], grid_size[1], grid_size[2]), dtype=np.float32))
@@ -292,7 +417,7 @@ def save_Nbg_map(map_data, Nbg, path, name) :
     
 def CC_vs_n(on_map, off_map) :
 
-    """ Obtains Pearson correlation coefficient for two maps (input as 1D numpy arrays)"""
+    """ Obtains Pearson correlation coefficient for two maps (input at 1D numpy arrays)"""
         
     CC = np.corrcoef(on_map, off_map)[0,1]
     
@@ -323,7 +448,7 @@ def screen_qweighted(on_s, off_s, sig_on, sig_off, calc_df, Nbg, name, alpha, h_
 	7.     name for this map iteration (as a string)
 	8-9.   high and low resolution cutoffs (as floats)
 	10.    path (as string) where maps should be saved. The bash script make_ccp4map.sh should be copied here.
-    11-13. chromophore center (xyz coordinate vector) and radius (float) to be used for the mask, as well as grid sampling (float)
+        11-13. chromophore center (xyz coordinate vector) and radius (float) to be used for the mask, as well as grid sampling (float)
 
     Returns :
 
@@ -333,14 +458,18 @@ def screen_qweighted(on_s, off_s, sig_on, sig_off, calc_df, Nbg, name, alpha, h_
 
     """
 
-    diffs           = on_s - Nbg * off_s
-    sig_diffs       = np.sqrt(sig_on**2 + sig_off**2)
-    ws              = compute_weights(diffs, sig_diffs, alpha=alpha)
-    diffs_w         = ws * diffs
+    diffs = on_s - Nbg * off_s
+    sig_diffs = np.sqrt(sig_on**2 + sig_off**2)
+    
+    ws = compute_weights(diffs, sig_diffs, alpha=alpha)
+    diffs_w = ws * diffs
     
     calc_df["DF"]	= diffs
+
     calc_df["DF"]	= calc_df["DF"].astype("SFAmplitude")
+
     calc_df["WDF"]	= diffs_w
+
     calc_df["WDF"]	= calc_df["WDF"].astype("SFAmplitude")
 
     calc_df["SIGDF"]	= sig_diffs

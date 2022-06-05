@@ -26,9 +26,8 @@ masker.rshrink = 1.1
 
 cell         = [51.99, 62.91, 72.03, 90, 90, 90]
 space_group  = 'P212121'
-grid_size    = [150, 180, 216]
-#grid_size    = [144, 160, 192]
-
+#grid_size    = [150, 180, 216]
+grid_size    = [128, 160, 180]
 
 #### Paths for correlation pipeline ####
 
