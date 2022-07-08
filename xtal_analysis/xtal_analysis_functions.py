@@ -46,9 +46,8 @@ def map2mtz(map, mtz_name, high_res):
     """
 
     m = gm.read_ccp4_map(map, setup=True)
-    sf = gm.transform_map_to_f_phi(m.grid, half_l=True)
-    data = sf.prepare_asu_data(dmin=high_res)
-
+    sf = gm.transform_map_to_f_phi(m.grid, half_l=False)
+    data = sf.prepare_asu_data(dmin=high_res-0.03, with_sys_abs=True)
     mtz = gm.Mtz(with_base=True)
     mtz.spacegroup = sf.spacegroup
     mtz.set_cell_for_all(sf.unit_cell)
@@ -56,6 +55,7 @@ def map2mtz(map, mtz_name, high_res):
     mtz.add_column('FWT', 'F')
     mtz.add_column('PHWT', 'P')
     mtz.set_data(data)
+    mtz.switch_to_asu_hkl()
     mtz.write_to_file(mtz_name)
     
 
@@ -203,7 +203,7 @@ def map_from_Fs(path, Fs, phis, map_res):
     ccp4 = gm.Ccp4Map()
     ccp4.grid = mtz.transform_f_phi_to_map('{}'.format(Fs), '{}'.format(phis), sample_rate=map_res)
     ccp4.update_ccp4_header(2, True)
-
+    
     return ccp4
 
 def load_ccp4(ccp4):
